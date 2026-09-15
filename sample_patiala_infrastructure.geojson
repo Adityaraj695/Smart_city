@@ -1,0 +1,196 @@
+{
+  "type": "FeatureCollection",
+  "name": "Patiala_Sector_4_Urban_Infrastructure",
+  "crs": {
+    "type": "name",
+    "properties": {
+      "name": "urn:ogc:def:crs:OGC:1.3:CRS84"
+    }
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "id": "road-primary-1",
+      "properties": {
+        "name": "Rajbaha Road Arterial",
+        "category": "road",
+        "highway": "primary",
+        "lanes": 4,
+        "surface": "asphalt"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [76.368, 30.332],
+          [76.380, 30.338],
+          [76.395, 30.342],
+          [76.412, 30.346]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "road-secondary-1",
+      "properties": {
+        "name": "Mall Road Collector",
+        "category": "road",
+        "highway": "secondary",
+        "lanes": 2,
+        "surface": "asphalt"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [76.375, 30.355],
+          [76.382, 30.345],
+          [76.388, 30.330],
+          [76.391, 30.320]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "water-main-1",
+      "properties": {
+        "name": "Central Supply Main A",
+        "category": "water",
+        "diameterMm": 600,
+        "water_pipe": "main",
+        "pressure_bar": 4.2
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [76.370, 30.333],
+          [76.381, 30.339],
+          [76.393, 30.341],
+          [76.405, 30.344]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "drain-outfall-1",
+      "properties": {
+        "name": "Badi Nadi Storm Outfall",
+        "category": "drainage",
+        "waterway": "drain",
+        "drain_type": "stormwater_channel",
+        "width_m": 4.5
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [76.365, 30.326],
+          [76.380, 30.328],
+          [76.398, 30.332],
+          [76.415, 30.338]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "hospital-rajindra",
+      "properties": {
+        "name": "Government Rajindra Hospital",
+        "category": "healthcare",
+        "amenity": "hospital",
+        "beds": 650,
+        "emergency": "yes"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [76.3812, 30.3345]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "clinic-modeltown",
+      "properties": {
+        "name": "Model Town Community Health Centre",
+        "category": "healthcare",
+        "amenity": "clinic",
+        "beds": 45,
+        "emergency": "no"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [76.3695, 30.3392]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "school-model",
+      "properties": {
+        "name": "Govt. Senior Secondary Model School",
+        "category": "education",
+        "amenity": "school",
+        "capacity": 1400,
+        "level": "secondary"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [76.3785, 30.3382]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "college-thapar",
+      "properties": {
+        "name": "Thapar Urban Polytechnic & College",
+        "category": "education",
+        "amenity": "college",
+        "capacity": 3200,
+        "level": "tertiary"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [76.3642, 30.3540]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "building-cluster-north",
+      "properties": {
+        "name": "Northern Residential Sector 4B",
+        "category": "building",
+        "building": "residential",
+        "estimated_units": 480
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [76.398, 30.358],
+            [76.415, 30.359],
+            [76.417, 30.350],
+            [76.399, 30.349],
+            [76.398, 30.358]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "building-cluster-east",
+      "properties": {
+        "name": "Eastern Dense Commercial Residential Block",
+        "category": "building",
+        "building": "commercial_residential",
+        "estimated_units": 620
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [76.402, 30.338],
+            [76.418, 30.340],
+            [76.419, 30.330],
+            [76.404, 30.328],
+            [76.402, 30.338]
+          ]
+        ]
+      }
+    }
+  ]
+}

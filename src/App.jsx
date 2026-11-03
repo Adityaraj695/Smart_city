@@ -33,6 +33,7 @@ import {
   analysisHistoryLog
 } from './data/sampleDatasets';
 import { analyzeGeoJsonData } from './utils/geoJsonAnalyzer';
+import { analyzeInfrastructureGaps, areaOfBounds } from './utils/spatialAnalysis';
 
 export default function App() {
   // Signed-in user (null = signed out); authChecked flips once /api/me answers.
@@ -67,6 +68,9 @@ export default function App() {
 
   // Result of analysing an uploaded file (null while the built-in sample is loaded)
   const [uploadAnalysis, setUploadAnalysis] = useState(null);
+  // Computed gap analysis for the uploaded file. Null means the built-in
+  // sample is loaded and the findings on screen belong to it, not to the user.
+  const [spatialAnalysis, setSpatialAnalysis] = useState(null);
 
   // Power Outage Telemetry Simulation
   const [powerSimulated, setPowerSimulated] = useState(false);
@@ -114,11 +118,15 @@ export default function App() {
       else low++;
     });
 
+    // These keys must match the props SummaryMetrics reads. They did not:
+    // the component was passed `summaryCounts.highPriority` and friends, which
+    // were undefined, so React fell back to its hardcoded defaults of 6/11/7.
+    // The dashboard then showed a total of 12 beside a breakdown summing to 24.
     return {
       totalIssues: issues.length,
-      high,
-      medium,
-      low,
+      highPriority: high,
+      mediumPriority: medium,
+      lowPriority: low,
       recommendationsCount: recommendations.length
     };
   }, [issues, recommendations]);
@@ -127,23 +135,36 @@ export default function App() {
   const handleFileUpload = (geoJsonData, fileName, fileSize, alreadySaved = false) => {
     try {
       const analysis = analyzeGeoJsonData(geoJsonData);
+      // Detect gaps in the user's own data. Previously the layer counts below
+      // were recomputed on upload while the issues, recommendations and module
+      // percentages stayed on the Patiala sample — so a Mumbai file produced a
+      // Mumbai map above a table of Patiala findings, and "Inspect on Map"
+      // flew to Punjab.
+      const spatial = analyzeInfrastructureGaps(geoJsonData, { fileName });
 
       const customDataset = {
         id: 'custom-' + Date.now(),
         name: fileName.replace('.geojson', '').replace('.json', ''),
         auditDate: 'Real-time Ingest',
-        areaKm2: 12.5,
-        estimatedPopulation: 54000,
+        areaKm2: areaOfBounds(spatial.bounds),
+        estimatedPopulation: null,
         hasPowerData: analysis.counts.power > 0,
         geoJson: geoJsonData
       };
 
       setCurrentDataset(customDataset);
       setUploadAnalysis(analysis);
-      // The built-in gap zones and proposed sites belong to the sample dataset only;
-      // never draw them over a user's own data.
-      setMapGapZones([]);
-      setMapInterventions([]);
+      setSpatialAnalysis(spatial);
+      // Mark the uploaded file as the active source immediately. This used to
+      // wait for the save request to resolve, so the selector kept reading
+      // "Sample: Patiala Sector 4" while the user's own file was on the map.
+      setActiveSourceId(customDataset.id);
+      setIssues(spatial.issues);
+      setRecommendations(spatial.recommendations);
+      setMapGapZones(spatial.gapZones);
+      setMapInterventions(spatial.interventions);
+      setCategoryFilter('ALL');
+      setPriorityFilter('ALL');
       setCurrentFileMeta({
         name: fileName,
         size: fileSize || 'Custom File',
@@ -189,10 +210,13 @@ export default function App() {
       timestamp: 'May 2026'
     });
     setPowerSimulated(false);
+    setSpatialAnalysis(null);
     setIssues(defaultIssues);
     setRecommendations(defaultRecommendations);
     setMapGapZones(defaultMapGapZones);
     setMapInterventions(defaultMapInterventions);
+    setCategoryFilter('ALL');
+    setPriorityFilter('ALL');
   };
 
   // Upload page's "Continue with the sample dataset" path — provides the
@@ -316,6 +340,8 @@ export default function App() {
     <div className="min-h-screen bg-neutral-50 text-neutral-900 flex antialiased">
       {/* Left Sidebar */}
       <Sidebar
+        issueCount={issues.length}
+        recommendationCount={recommendations.length}
         activeNav={activeNav}
         onNavigate={handleNavigate}
         datasetName={currentDataset.name}
@@ -383,6 +409,15 @@ export default function App() {
           {/* 4. Primary Infrastructure Analysis Modules (Water, Power, Healthcare, Education) */}
           <AnalysisModules
             powerAvailable={powerSimulated}
+            modules={spatialAnalysis ? spatialAnalysis.modules : {}}
+            issues={issues}
+            counts={uploadAnalysis ? uploadAnalysis.counts : {
+              roads: patialaSectorDataset.geoJson.features.filter(
+                (f) => f.geometry && /LineString/.test(f.geometry.type)).length,
+              buildings: patialaSectorDataset.geoJson.features.filter(
+                (f) => f.geometry && /Polygon/.test(f.geometry.type)).length
+            }}
+            isSample={!spatialAnalysis}
             onFilterCategory={(cat) => {
               setCategoryFilter(cat);
               setActiveDetailTab('issues');

@@ -8,12 +8,17 @@ import {
   Filter
 } from 'lucide-react';
 
+// Defaults are all zero on purpose. They used to be 24/6/11/7, lifted from the
+// sample dataset, so any prop that failed to arrive silently became a
+// plausible-looking statistic about the user's own file. A missing count
+// should read as zero and be obviously wrong, not as a confident number that
+// happens to be false.
 export default function SummaryMetrics({
-  totalIssues = 24,
-  highPriority = 6,
-  mediumPriority = 11,
-  lowPriority = 7,
-  recommendationsCount = 18,
+  totalIssues = 0,
+  highPriority = 0,
+  mediumPriority = 0,
+  lowPriority = 0,
+  recommendationsCount = 0,
   activePriorityFilter,
   onSelectPriorityFilter
 }) {
@@ -25,7 +30,7 @@ export default function SummaryMetrics({
       icon: AlertOctagon,
       countColor: 'text-neutral-900',
       accentColor: 'border-l-blue-500',
-      badge: '+4 Q2 Audit',
+      badge: 'Detected',
       badgeClass: 'bg-neutral-100 text-neutral-600'
     },
     {
@@ -65,7 +70,7 @@ export default function SummaryMetrics({
       icon: Lightbulb,
       countColor: 'text-emerald-600',
       accentColor: 'border-l-emerald-500',
-      badge: '18 Generated',
+      badge: `${recommendationsCount} Generated`,
       badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200'
     }
   ];
@@ -115,7 +120,7 @@ export default function SummaryMetrics({
                 <span className="text-xs text-neutral-500 font-semibold truncate">
                   {card.title}
                 </span>
-                <span className={`text-[10px] px-1.5 py-0.2 rounded border font-semibold ${card.badgeClass}`}>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold ${card.badgeClass}`}>
                   {card.badge}
                 </span>
               </div>

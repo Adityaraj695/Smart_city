@@ -1,5 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
+import { classifyFeature } from '../utils/geoJsonAnalyzer';
+import { detectRegion, reverseGeocode } from '../utils/regionDetector';
 import {
   Layers,
   RotateCcw,
@@ -14,14 +16,52 @@ import {
   AlertOctagon,
   Sparkles,
   Info,
-  Maximize2
+  Maximize2,
+  Crosshair
 } from 'lucide-react';
+
+const esc = (v) =>
+  String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+const svg = (inner) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+
+// How each classified layer is drawn, and how it is named in popups.
+const LAYER_STYLES = {
+  roads: { label: 'ROAD / TRANSPORT', color: '#38bdf8', fill: '#38bdf8', fillOpacity: 0.1, weight: 2.5, text: 'text-sky-600', bg: '#0284c7', border: '#7dd3fc', svg: svg('<path d="M3 11l19-9-9 19-2-8-8-2z"/>') },
+  buildings: { label: 'BUILDING / FOOTPRINT', color: '#f59e0b', fill: '#d97706', fillOpacity: 0.25, weight: 1.2, text: 'text-amber-600', bg: '#d97706', border: '#fcd34d', svg: svg('<rect x="4" y="2" width="16" height="20"/><path d="M9 22v-4h6v4"/>') },
+  water: { label: 'WATER NETWORK', color: '#06b6d4', fill: '#06b6d4', fillOpacity: 0.15, weight: 3, dash: '5, 5', text: 'text-cyan-600', bg: '#0891b2', border: '#67e8f9', svg: svg('<path d="M12 2.7l5.7 5.7a8 8 0 1 1-11.4 0z"/>') },
+  drainage: { label: 'DRAINAGE NETWORK', color: '#3b82f6', fill: '#3b82f6', fillOpacity: 0.15, weight: 3.5, text: 'text-blue-600', bg: '#2563eb', border: '#93c5fd', svg: svg('<path d="M2 12c2-3 4-3 6 0s4 3 6 0 4-3 6 0"/>') },
+  healthcare: { label: 'HEALTHCARE FACILITY', color: '#f43f5e', fill: '#f43f5e', fillOpacity: 0.3, weight: 2, text: 'text-rose-600', bg: '#e11d48', border: '#fda4af', svg: svg('<path d="M12 5v14"/><path d="M5 12h14"/>') },
+  education: { label: 'EDUCATION FACILITY', color: '#818cf8', fill: '#818cf8', fillOpacity: 0.3, weight: 2, text: 'text-indigo-600', bg: '#4f46e5', border: '#c7d2fe', svg: svg('<path d="M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z"/><path d="M22 10v6"/><path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5"/>') },
+  power: { label: 'POWER / ELECTRICAL', color: '#eab308', fill: '#eab308', fillOpacity: 0.25, weight: 2.5, text: 'text-amber-600', bg: '#d97706', border: '#fde047', svg: svg('<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>') },
+  other: { label: 'UNCLASSIFIED FEATURE', color: '#a3a3a3', fill: '#a3a3a3', fillOpacity: 0.2, weight: 2, text: 'text-neutral-500', bg: '#737373', border: '#d4d4d4', svg: svg('<circle cx="12" cy="12" r="4"/>') }
+};
+
+// Popup shows the feature's own properties, exactly as stored in the file.
+function buildPopup(style, props, geomType) {
+  const title = props.name || props.title || props['name:en'] || props.id || style.label;
+  const rows = Object.entries(props)
+    .filter(([k]) => k !== 'name')
+    .slice(0, 14)
+    .map(([k, v]) => {
+      const val = typeof v === 'object' && v !== null ? JSON.stringify(v) : v;
+      return `<p>${esc(k)}: <span class="text-neutral-700">${esc(val)}</span></p>`;
+    })
+    .join('');
+  return `
+    <div class="p-2.5 font-mono text-xs">
+      <span class="text-[9px] font-bold ${style.text} block uppercase">${style.label} &bull; ${esc(geomType)}</span>
+      <h4 class="font-bold text-neutral-900 text-xs">${esc(title)}</h4>
+      <div class="text-[11px] text-neutral-500 mt-1 space-y-0.5">${rows || '<p>No properties in file</p>'}</div>
+    </div>`;
+}
+
 
 export default function InteractiveMap({
   dataset,
   mapGapZones,
   mapInterventions,
-  powerAvailable,
   focusedLocation,
   onClearFocus
 }) {
@@ -29,6 +69,23 @@ export default function InteractiveMap({
   const mapInstanceRef = useRef(null);
   const layerGroupsRef = useRef({});
   const markersRef = useRef({});
+  const dataBoundsRef = useRef(null);
+
+  const [renderStats, setRenderStats] = useState(null);
+  const [place, setPlace] = useState(null);
+
+  // Where the uploaded data actually is, and what place that is.
+  const region = useMemo(() => detectRegion(dataset?.geoJson), [dataset]);
+  // Only trust a looked-up name that belongs to the current region.
+  const placeName = place?.region === region ? place : null;
+  useEffect(() => {
+    if (!region.valid) return;
+    const ctrl = new AbortController();
+    reverseGeocode(region.centre.lat, region.centre.lng, ctrl.signal).then((r) => {
+      if (!ctrl.signal.aborted) setPlace(r ? { ...r, region } : null);
+    });
+    return () => ctrl.abort();
+  }, [region]);
 
   // Layer Visibility
   const [layersVisibility, setLayersVisibility] = useState({
@@ -40,26 +97,21 @@ export default function InteractiveMap({
     education: true,
     gaps: true,
     interventions: true,
-    power: powerAvailable
+    power: true,
+    other: true,
+    extent: true
   });
 
   const [activeLegend, setActiveLegend] = useState(true);
   const [activeLayerPanel, setActiveLayerPanel] = useState(false);
-
-  useEffect(() => {
-    setLayersVisibility((prev) => ({
-      ...prev,
-      power: powerAvailable
-    }));
-  }, [powerAvailable]);
 
   // Initialize Map
   useEffect(() => {
     if (!mapContainerRef.current || mapInstanceRef.current) return;
 
     const map = L.map(mapContainerRef.current, {
-      center: [30.342, 76.388],
-      zoom: 13,
+      center: [20, 78],
+      zoom: 4,
       zoomControl: false,
       attributionControl: false
     });
@@ -84,7 +136,9 @@ export default function InteractiveMap({
       education: L.layerGroup().addTo(map),
       gaps: L.layerGroup().addTo(map),
       interventions: L.layerGroup().addTo(map),
-      power: L.layerGroup().addTo(map)
+      power: L.layerGroup().addTo(map),
+      other: L.layerGroup().addTo(map),
+      extent: L.layerGroup().addTo(map)
     };
 
     mapInstanceRef.current = map;
@@ -122,7 +176,8 @@ export default function InteractiveMap({
     });
   };
 
-  // Render Layers
+  // Render Layers — every feature in the uploaded GeoJSON is drawn exactly
+  // where its coordinates say, in the layer the analysis engine classified it into.
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
@@ -131,169 +186,87 @@ export default function InteractiveMap({
     markersRef.current = {};
 
     const features = dataset?.geoJson?.features || [];
+    const stats = { rendered: 0, skipped: 0 };
+    const dataBounds = L.latLngBounds([]);
 
     features.forEach((f) => {
-      const p = f.properties || {};
-      const cat = (p.category || '').toLowerCase();
-      const amenity = (p.amenity || '').toLowerCase();
-      const geom = f.geometry;
-
-      if (!geom) return;
-
-      // Roads
-      if (cat === 'road' && geom.type === 'LineString') {
-        const latLngs = geom.coordinates.map((c) => [c[1], c[0]]);
-        const color = p.type === 'primary' ? '#38bdf8' : '#737373';
-        const weight = p.type === 'primary' ? 3.5 : 1.8;
-
-        const line = L.polyline(latLngs, { color, weight, opacity: 0.85 });
-        line.bindPopup(`
-          <div class="p-2.5 font-mono text-xs">
-            <span class="text-[9px] font-bold text-sky-600 block uppercase">ROAD CORRIDOR</span>
-            <h4 class="font-bold text-neutral-900 text-xs">${p.name}</h4>
-            <div class="text-[11px] text-neutral-500 mt-1 space-y-0.5">
-              <p>Type: <span class="text-neutral-700">${p.type}</span></p>
-              <p>Lanes: <span class="text-neutral-700">${p.lanes || 2}</span></p>
-              <p>Design Speed: <span class="text-neutral-700">${p.speedLimit || 40} km/h</span></p>
-            </div>
-          </div>
-        `);
-        line.addTo(layerGroupsRef.current.roads);
+      const geom = f?.geometry;
+      const p = f?.properties || {};
+      if (!geom || !geom.type || (!geom.coordinates && geom.type !== 'GeometryCollection')) {
+        stats.skipped++;
+        return;
       }
 
-      // Water Supply
-      if (cat === 'water' && geom.type === 'LineString') {
-        const latLngs = geom.coordinates.map((c) => [c[1], c[0]]);
-        const line = L.polyline(latLngs, {
-          color: '#06b6d4',
-          weight: 3,
-          dashArray: '5, 5',
-          opacity: 0.9
+      const layerKey = classifyFeature(f) || 'other';
+      const style = LAYER_STYLES[layerKey];
+      const isPoint = geom.type === 'Point' || geom.type === 'MultiPoint';
+      const popupHtml = buildPopup(style, p, geom.type);
+
+      let layer;
+      try {
+        layer = L.geoJSON(f, {
+          style: () => ({
+            color: style.color,
+            weight: style.weight,
+            opacity: 0.9,
+            fillColor: style.fill,
+            fillOpacity: style.fillOpacity,
+            dashArray: style.dash
+          }),
+          pointToLayer: (_pt, latlng) => L.marker(latlng, { icon: createCustomIcon(style.bg, style.border, style.svg) })
         });
-        line.bindPopup(`
-          <div class="p-2.5 font-mono text-xs">
-            <span class="text-[9px] font-bold text-cyan-600 block uppercase">WATER SUPPLY TRUNK</span>
-            <h4 class="font-bold text-neutral-900 text-xs">${p.name}</h4>
-            <div class="text-[11px] text-neutral-500 mt-1 space-y-0.5">
-              <p>Diameter: <span class="text-neutral-700">${p.diameterMm} mm</span></p>
-              <p>Operating Pressure: <span class="text-neutral-700">${p.pressureBar} bar</span></p>
-              <p>Flow Status: <span class="text-emerald-600 font-bold">Pressurized</span></p>
-            </div>
-          </div>
-        `);
-        line.addTo(layerGroupsRef.current.water);
+      } catch {
+        stats.skipped++;
+        return;
       }
 
-      // Drainage Network
-      if (cat === 'drainage' && geom.type === 'LineString') {
-        const latLngs = geom.coordinates.map((c) => [c[1], c[0]]);
-        const line = L.polyline(latLngs, { color: '#3b82f6', weight: 3.5, opacity: 0.85 });
-        line.bindPopup(`
-          <div class="p-2.5 font-mono text-xs">
-            <span class="text-[9px] font-bold text-blue-600 block uppercase">STORMWATER CONDUIT</span>
-            <h4 class="font-bold text-neutral-900 text-xs">${p.name}</h4>
-            <div class="text-[11px] text-neutral-500 mt-1 space-y-0.5">
-              <p>Width: <span class="text-neutral-700">${p.widthM} m</span></p>
-              <p>Channel: <span class="text-neutral-700">${p.type}</span></p>
-              <p>Maintenance: <span class="text-amber-700">${p.maintenance}</span></p>
-            </div>
-          </div>
-        `);
-        line.addTo(layerGroupsRef.current.drainage);
+      const bounds = layer.getBounds();
+      if (!bounds.isValid()) {
+        stats.skipped++;
+        return;
       }
 
-      // Healthcare
-      if (cat === 'healthcare' && geom.type === 'Point') {
-        const latLng = [geom.coordinates[1], geom.coordinates[0]];
-        const isHospital = amenity === 'hospital';
+      layer.bindPopup(popupHtml, { maxWidth: 300 });
+      layer.addTo(layerGroupsRef.current[layerKey]);
+      dataBounds.extend(bounds);
+      stats.rendered++;
 
-        L.circle(latLng, {
-          radius: (p.catchmentRadiusKm || 1.5) * 1000,
-          color: '#f43f5e',
-          fillColor: '#f43f5e',
+      // Facilities also get a service catchment ring around their location.
+      if (layerKey === 'healthcare' || layerKey === 'education') {
+        const radiusKm = Number(p.catchmentRadiusKm) || (layerKey === 'healthcare' ? 1.5 : 1.2);
+        if (!isPoint) {
+          // polygon facility: also place a marker at its centre
+          L.marker(bounds.getCenter(), { icon: createCustomIcon(style.bg, style.border, style.svg) })
+            .bindPopup(popupHtml, { maxWidth: 300 })
+            .addTo(layerGroupsRef.current[layerKey]);
+        }
+        L.circle(bounds.getCenter(), {
+          radius: radiusKm * 1000,
+          color: style.color,
+          fillColor: style.color,
           fillOpacity: 0.07,
           weight: 1,
-          dashArray: '3, 4'
-        }).addTo(layerGroupsRef.current.healthcare);
-
-        const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>`;
-        const marker = L.marker(latLng, {
-          icon: createCustomIcon(isHospital ? '#e11d48' : '#be123c', '#fda4af', iconSvg)
-        });
-
-        marker.bindPopup(`
-          <div class="p-2.5 font-mono text-xs">
-            <span class="text-[9px] font-bold text-rose-600 block uppercase">${isHospital ? 'GENERAL HOSPITAL' : 'COMMUNITY CLINIC'}</span>
-            <h4 class="font-bold text-neutral-900 text-xs">${p.name}</h4>
-            <div class="text-[11px] text-neutral-500 mt-1 space-y-0.5">
-              <p>Sector: <span class="text-neutral-700">${p.sector || 'Urban Core'}</span></p>
-              <p>Bed Capacity: <span class="text-neutral-700">${p.beds} beds</span></p>
-              <p>Catchment Buffer: <span class="text-rose-700 font-bold">${p.catchmentRadiusKm} km</span></p>
-            </div>
-          </div>
-        `);
-        marker.addTo(layerGroupsRef.current.healthcare);
-      }
-
-      // Education
-      if (cat === 'education' && geom.type === 'Point') {
-        const latLng = [geom.coordinates[1], geom.coordinates[0]];
-        const isCollege = amenity === 'college';
-
-        L.circle(latLng, {
-          radius: (p.catchmentRadiusKm || 1.2) * 1000,
-          color: '#818cf8',
-          fillColor: '#818cf8',
-          fillOpacity: 0.07,
-          weight: 1,
-          dashArray: '3, 4'
-        }).addTo(layerGroupsRef.current.education);
-
-        const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z"/><path d="M22 10v6"/><path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5"/></svg>`;
-        const marker = L.marker(latLng, {
-          icon: createCustomIcon(isCollege ? '#4338ca' : '#4f46e5', '#c7d2fe', iconSvg)
-        });
-
-        marker.bindPopup(`
-          <div class="p-2.5 font-mono text-xs">
-            <span class="text-[9px] font-bold text-indigo-600 block uppercase">${isCollege ? 'COLLEGE / TERTIARY' : 'MODEL SCHOOL'}</span>
-            <h4 class="font-bold text-neutral-900 text-xs">${p.name}</h4>
-            <div class="text-[11px] text-neutral-500 mt-1 space-y-0.5">
-              <p>Levels: <span class="text-neutral-700">${p.gradeLevels}</span></p>
-              <p>Capacity: <span class="text-neutral-700">${p.capacity} students</span></p>
-              <p>Buffer: <span class="text-indigo-700 font-bold">${p.catchmentRadiusKm} km</span></p>
-            </div>
-          </div>
-        `);
-        marker.addTo(layerGroupsRef.current.education);
-      }
-
-      // Buildings
-      if (cat === 'building' && geom.type === 'Polygon') {
-        const latLngs = geom.coordinates[0].map((c) => [c[1], c[0]]);
-        const poly = L.polygon(latLngs, {
-          color: '#f59e0b',
-          fillColor: '#d97706',
-          fillOpacity: 0.2,
-          weight: 1.2
-        });
-
-        poly.bindPopup(`
-          <div class="p-2.5 font-mono text-xs">
-            <span class="text-[9px] font-bold text-amber-600 block uppercase">BUILDING FOOTPRINT CLUSTER</span>
-            <h4 class="font-bold text-neutral-900 text-xs">${p.name}</h4>
-            <div class="text-[11px] text-neutral-500 mt-1 space-y-0.5">
-              <p>Classification: <span class="text-neutral-700">${p.type}</span></p>
-              <p>Population: <span class="text-neutral-700">${p.estimatedPopulation?.toLocaleString()}</span></p>
-              <p>Units: <span class="text-neutral-700">${p.buildingUnits}</span></p>
-            </div>
-          </div>
-        `);
-        poly.addTo(layerGroupsRef.current.buildings);
+          dashArray: '3, 4',
+          interactive: false
+        }).addTo(layerGroupsRef.current[layerKey]);
       }
     });
 
-    // Gap Zones
+    // Outline of the data's actual extent
+    if (dataBounds.isValid()) {
+      L.rectangle(dataBounds, {
+        color: '#2563eb',
+        weight: 1.5,
+        dashArray: '6, 6',
+        fill: false,
+        interactive: false
+      }).addTo(layerGroupsRef.current.extent);
+    }
+
+    dataBoundsRef.current = dataBounds.isValid() ? dataBounds : null;
+    setRenderStats({ ...stats, total: features.length });
+
+    // Gap Zones (only present for the built-in sample analysis)
     mapGapZones.forEach((gap) => {
       const circle = L.circle(gap.coordinates, {
         radius: gap.radiusMeters,
@@ -307,11 +280,11 @@ export default function InteractiveMap({
       circle.bindPopup(`
         <div class="p-2.5 font-mono text-xs">
           <span class="text-[9px] font-bold text-rose-600 block uppercase">GAP ZONE DETECTED</span>
-          <h4 class="font-bold text-neutral-900 text-xs">${gap.name}</h4>
-          <p class="text-[11px] text-neutral-600 mt-1">${gap.description}</p>
+          <h4 class="font-bold text-neutral-900 text-xs">${esc(gap.name)}</h4>
+          <p class="text-[11px] text-neutral-600 mt-1">${esc(gap.description)}</p>
           <div class="mt-2 pt-1 border-t border-neutral-200 flex justify-between text-[10px]">
             <span class="text-neutral-500">Severity:</span>
-            <span class="font-bold text-rose-600">${gap.severity}/10 (${gap.priority})</span>
+            <span class="font-bold text-rose-600">${esc(gap.severity)}/10 (${esc(gap.priority)})</span>
           </div>
         </div>
       `);
@@ -321,7 +294,7 @@ export default function InteractiveMap({
 
     // Proposed Interventions
     mapInterventions.forEach((intv) => {
-      const starSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
+      const starSvg = svg('<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>');
       const marker = L.marker(intv.coordinates, {
         icon: createCustomIcon('#059669', '#34d399', starSvg)
       });
@@ -329,37 +302,19 @@ export default function InteractiveMap({
       marker.bindPopup(`
         <div class="p-2.5 font-mono text-xs">
           <span class="text-[9px] font-bold text-emerald-600 block uppercase">PROPOSED CAPITAL INTERVENTION</span>
-          <h4 class="font-bold text-neutral-900 text-xs">${intv.name}</h4>
-          <p class="text-[11px] text-neutral-600 mt-1">${intv.details}</p>
+          <h4 class="font-bold text-neutral-900 text-xs">${esc(intv.name)}</h4>
+          <p class="text-[11px] text-neutral-600 mt-1">${esc(intv.details)}</p>
         </div>
       `);
       marker.addTo(layerGroupsRef.current.interventions);
       markersRef.current[intv.id] = marker;
     });
+  }, [dataset, mapGapZones, mapInterventions]);
 
-    // Power Outage Nodes (if powerAvailable is true)
-    if (powerAvailable) {
-      const powerHotspots = [
-        { id: 'pwr-1', name: 'Grid Feeder 14 Substation', coords: [30.341, 76.398], freq: '5 incidents / month' },
-        { id: 'pwr-2', name: 'Industrial Sector Feeder', coords: [30.350, 76.415], freq: '8 incidents / month' }
-      ];
-
-      powerHotspots.forEach((pwr) => {
-        const zapSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>`;
-        const marker = L.marker(pwr.coords, {
-          icon: createCustomIcon('#d97706', '#fde047', zapSvg)
-        });
-        marker.bindPopup(`
-          <div class="p-2.5 font-mono text-xs">
-            <span class="text-[9px] font-bold text-amber-600 block uppercase">POWER TELEMETRY FEED</span>
-            <h4 class="font-bold text-neutral-900 text-xs">${pwr.name}</h4>
-            <p class="text-[11px] text-neutral-500 mt-1">Outage Rate: <span class="text-amber-700 font-bold">${pwr.freq}</span></p>
-          </div>
-        `);
-        marker.addTo(layerGroupsRef.current.power);
-      });
-    }
-  }, [dataset, mapGapZones, mapInterventions, powerAvailable]);
+  // Zoom to the uploaded data whenever the dataset changes
+  useEffect(() => {
+    fitToData();
+  }, [dataset]);
 
   // Sync Layer Visibility
   useEffect(() => {
@@ -398,7 +353,7 @@ export default function InteractiveMap({
     L.popup({ autoClose: false, closeOnClick: true })
       .setLatLng(coordinates)
       .setContent(`
-        <div class="p-2.5 font-mono text-xs max-w-[260px]">
+        <div class="p-2.5 font-mono text-xs max-w-65">
           <span class="text-[9px] font-bold uppercase text-rose-600 block">TARGETED GAP ZONE</span>
           <h4 class="font-bold text-neutral-900 text-xs">${title}</h4>
           <p class="text-[11px] text-neutral-600 mt-1">${details || ''}</p>
@@ -420,19 +375,25 @@ export default function InteractiveMap({
     };
   }, [focusedLocation]);
 
+  function fitToData() {
+    const map = mapInstanceRef.current;
+    const b = dataBoundsRef.current;
+    if (map && b) map.fitBounds(b, { padding: [30, 30], maxZoom: 17 });
+  }
+
   const toggleLayer = (key) => {
     setLayersVisibility((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
   const resetMapView = () => {
     if (mapInstanceRef.current) {
-      mapInstanceRef.current.flyTo([30.342, 76.388], 13, { duration: 1.0 });
+      fitToData();
       if (onClearFocus) onClearFocus();
     }
   };
 
   return (
-    <section className="bg-white border border-neutral-200 rounded-xl overflow-hidden shadow-sm relative flex flex-col h-[520px] lg:h-[580px]">
+    <section className="bg-white border border-neutral-200 rounded-xl overflow-hidden shadow-sm relative flex flex-col h-130 lg:h-145">
       {/* Top Console Bar */}
       <div className="bg-neutral-50 px-4 py-2 border-b border-neutral-200 flex items-center justify-between z-20 shrink-0 font-mono text-xs">
         <div className="flex items-center gap-2">
@@ -442,7 +403,9 @@ export default function InteractiveMap({
           </span>
           <span className="hidden sm:inline text-neutral-300">|</span>
           <span className="hidden sm:inline text-neutral-500 text-[11px]">
-            LAT: 30.342° N &bull; LON: 76.388° E
+            {region.valid
+              ? `${placeName?.label ? placeName.label + ' • ' : ''}${region.centre.lat.toFixed(4)}°, ${region.centre.lng.toFixed(4)}°`
+              : 'No valid coordinates in file'}
           </span>
         </div>
 
@@ -485,9 +448,42 @@ export default function InteractiveMap({
       <div className="relative flex-1 w-full h-full">
         <div ref={mapContainerRef} className="w-full h-full" />
 
+        {/* Detected region banner */}
+        <div className="absolute top-3 left-3 z-500 max-w-75 bg-white/95 border border-neutral-200 rounded-lg p-2.5 shadow-xl font-mono text-[10px] text-neutral-600">
+          <div className="flex items-center gap-1.5 text-[9px] font-bold uppercase text-blue-600 mb-1">
+            <Crosshair className="w-3 h-3" />
+            <span>Detected Region</span>
+          </div>
+          {region.valid ? (
+            <>
+              <p className="text-xs font-bold text-neutral-900 leading-tight">
+                {placeName?.label || 'Locating place name…'}
+              </p>
+              <p className="mt-1">Centre: {region.centre.lat.toFixed(4)}°N, {region.centre.lng.toFixed(4)}°E</p>
+              <p>
+                Extent: {region.widthKm.toFixed(1)} × {region.heightKm.toFixed(1)} km (~{region.areaKm2.toFixed(1)} km²)
+              </p>
+              <p className="text-neutral-400">
+                W {region.bounds.west.toFixed(4)} · E {region.bounds.east.toFixed(4)} · S {region.bounds.south.toFixed(4)} · N {region.bounds.north.toFixed(4)}
+              </p>
+              {renderStats && (
+                <p className="mt-1 pt-1 border-t border-neutral-200">
+                  Showing <b className="text-neutral-900">{renderStats.rendered}</b> of {renderStats.total} features from file
+                  {renderStats.skipped > 0 && <span className="text-rose-600"> ({renderStats.skipped} without usable geometry)</span>}
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="text-rose-600">No valid WGS84 coordinates found, so nothing can be placed on the map.</p>
+          )}
+          {region.warnings.map((w) => (
+            <p key={w} className="mt-1 text-amber-700">⚠ {w}</p>
+          ))}
+        </div>
+
         {/* Floating Layer Selection Panel */}
         {activeLayerPanel && (
-          <div className="absolute top-3 right-3 z-[500] w-60 bg-white/95 border border-neutral-200 rounded-lg p-3 shadow-xl font-mono text-xs">
+          <div className="absolute top-3 right-3 z-500 w-60 bg-white/95 border border-neutral-200 rounded-lg p-3 shadow-xl font-mono text-xs">
             <div className="flex items-center justify-between pb-1.5 mb-2 border-b border-neutral-200 text-[10px] text-neutral-400 uppercase font-bold">
               <span>LAYER VISIBILITY</span>
               <span>TOGGLE</span>
@@ -502,6 +498,9 @@ export default function InteractiveMap({
                 { key: 'healthcare', label: 'Hospitals & Clinics', icon: HeartPulse, color: 'text-rose-600' },
                 { key: 'education', label: 'Schools & Colleges', icon: GraduationCap, color: 'text-indigo-600' },
                 { key: 'gaps', label: 'Infrastructure Gap Zones', icon: AlertOctagon, color: 'text-rose-600' },
+                { key: 'power', label: 'Power / Electrical', icon: Zap, color: 'text-amber-600' },
+                { key: 'other', label: 'Unclassified Features', icon: MapPin, color: 'text-neutral-500' },
+                { key: 'extent', label: 'Data Extent Outline', icon: Maximize2, color: 'text-blue-600' },
                 { key: 'interventions', label: 'Proposed Interventions', icon: Sparkles, color: 'text-emerald-600' }
               ].map((item) => {
                 const Icon = item.icon;
@@ -521,34 +520,13 @@ export default function InteractiveMap({
                 );
               })}
 
-              {/* Power Outages layer */}
-              <label className={`flex items-center justify-between p-1 rounded text-neutral-600 ${
-                powerAvailable ? 'hover:bg-neutral-50 cursor-pointer' : 'opacity-40 cursor-not-allowed'
-              }`}>
-                <span className="flex items-center gap-2">
-                  <Zap className="w-3 h-3 text-amber-600" />
-                  <span>Power Telemetry</span>
-                </span>
-                <input
-                  type="checkbox"
-                  disabled={!powerAvailable}
-                  checked={layersVisibility.power && powerAvailable}
-                  onChange={() => toggleLayer('power')}
-                  className="rounded border-neutral-300 bg-white text-blue-600 focus:ring-0"
-                />
-              </label>
-              {!powerAvailable && (
-                <span className="text-[9px] text-amber-600/90 block px-1 italic">
-                  * Locked (Telemetry omitted in GeoJSON)
-                </span>
-              )}
             </div>
           </div>
         )}
 
         {/* Legend */}
         {activeLegend && (
-          <div className="absolute bottom-3 left-3 z-[500] bg-white/95 border border-neutral-200 rounded-lg p-2.5 shadow-xl font-mono text-[10px] text-neutral-600 max-w-xs">
+          <div className="absolute bottom-3 left-3 z-500 bg-white/95 border border-neutral-200 rounded-lg p-2.5 shadow-xl font-mono text-[10px] text-neutral-600 max-w-xs">
             <div className="flex items-center justify-between pb-1 mb-1.5 border-b border-neutral-200">
               <span className="font-bold text-neutral-400 uppercase">GIS LEGEND</span>
               <button onClick={() => setActiveLegend(false)} className="text-neutral-400 hover:text-neutral-900">✕</button>
@@ -582,8 +560,8 @@ export default function InteractiveMap({
           </div>
         )}
 
-        <div className="absolute bottom-2 right-2 z-[400] bg-white/80 px-2 py-0.5 rounded border border-neutral-200 text-[9px] font-mono text-neutral-500">
-          SCALE 1:25,000 &bull; CARTO DARK
+        <div className="absolute bottom-2 right-2 z-400 bg-white/80 px-2 py-0.5 rounded border border-neutral-200 text-[9px] font-mono text-neutral-500">
+          &copy; OpenStreetMap contributors
         </div>
       </div>
     </section>

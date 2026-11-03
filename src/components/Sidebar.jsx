@@ -9,14 +9,17 @@ import {
   History,
   Building2,
   ChevronRight,
-  ShieldCheck
+  ShieldCheck,
+  FolderOpen,
+  LogOut
 } from 'lucide-react';
 
-export default function Sidebar({ activeNav, onNavigate, datasetName }) {
+export default function Sidebar({ activeNav, onNavigate, datasetName, user, onLogout }) {
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'map', label: 'Map Analysis', icon: MapPin },
     { id: 'upload', label: 'Upload GeoJSON', icon: UploadCloud },
+    { id: 'files', label: 'Saved Files', icon: FolderOpen },
     { id: 'issues', label: 'Infrastructure Issues', icon: AlertOctagon, count: 24 },
     { id: 'recommendations', label: 'Recommendations', icon: Lightbulb, count: 18 },
     { id: 'visuals', label: 'Priority Visuals', icon: BarChart3 },
@@ -100,13 +103,20 @@ export default function Sidebar({ activeNav, onNavigate, datasetName }) {
 
       {/* User Profile */}
       <div className="p-4 border-t border-neutral-200 bg-neutral-50 flex items-center gap-3">
-        <div className="w-8 h-8 rounded-full bg-blue-100 border border-blue-200 flex items-center justify-center text-blue-700 font-bold text-xs">
-          AP
+        <div className="w-8 h-8 rounded-full bg-blue-100 border border-blue-200 flex items-center justify-center text-blue-700 font-bold text-xs uppercase">
+          {user?.fullName?.split(' ').map((w) => w[0]).slice(0, 2).join('')}
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-xs font-semibold text-neutral-800 truncate">Aditya Sharma</p>
-          <p className="text-[10px] text-neutral-500 truncate">Urban Planner</p>
+          <p className="text-xs font-semibold text-neutral-800 truncate">{user?.fullName}</p>
+          <p className="text-[10px] text-neutral-500 truncate">{user?.role}</p>
         </div>
+        <button
+          onClick={onLogout}
+          title="Log out"
+          className="p-1.5 rounded-lg text-neutral-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+        >
+          <LogOut className="w-4 h-4" />
+        </button>
       </div>
     </aside>
   );

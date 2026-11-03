@@ -1,6 +1,50 @@
 // GeoJSON Parser & Infrastructure Gap Analysis Engine
 // Strictly adheres to data integrity: Missing datasets are never synthetically assumed.
 
+// Decide which infrastructure layer a feature belongs to (or null when it
+// matches none). Shared by the analysis engine and the map so both always
+// agree on what the uploaded data contains.
+export function classifyFeature(feature) {
+  const props = feature?.properties || {};
+  const geomType = feature?.geometry ? feature.geometry.type : '';
+  const cat = String(props.category || '').toLowerCase();
+  const amenity = String(props.amenity || '').toLowerCase();
+  const highway = String(props.highway || '').toLowerCase();
+  const waterway = String(props.waterway || '').toLowerCase();
+  const power = props.power || props.outages !== undefined || props.grid_voltage !== undefined;
+
+  if (
+    cat === 'healthcare' || cat === 'hospital' ||
+    ['hospital', 'clinic', 'doctors', 'health_centre', 'dispensary'].includes(amenity)
+  ) return 'healthcare';
+
+  if (
+    cat === 'education' || cat === 'school' || cat === 'college' ||
+    ['school', 'college', 'university', 'kindergarten'].includes(amenity)
+  ) return 'education';
+
+  if (
+    cat === 'water' || cat === 'pipeline' || waterway === 'pipeline' ||
+    props.water_pipe !== undefined || props.water_pressure !== undefined || props.diameterMm !== undefined
+  ) return 'water';
+
+  if (
+    cat === 'drainage' || cat === 'stormwater' || waterway === 'drain' || waterway === 'ditch' ||
+    props.drain_type !== undefined || props.stormwater !== undefined
+  ) return 'drainage';
+
+  if (
+    cat === 'power' || cat === 'electricity' || power ||
+    props.outage_history !== undefined || props.blackout_hours !== undefined
+  ) return 'power';
+
+  if (cat === 'road' || highway || geomType === 'LineString' || geomType === 'MultiLineString') return 'roads';
+
+  if (cat === 'building' || props.building || geomType === 'Polygon' || geomType === 'MultiPolygon') return 'buildings';
+
+  return null;
+}
+
 export function analyzeGeoJsonData(geoJsonPayload) {
   if (!geoJsonPayload || !geoJsonPayload.features || !Array.isArray(geoJsonPayload.features)) {
     throw new Error('Invalid GeoJSON: Payload must contain a FeatureCollection with an array of features.');
@@ -30,109 +74,10 @@ export function analyzeGeoJsonData(geoJsonPayload) {
 
   // Inspect each feature to detect category based on OSM tags and GeoJSON properties
   for (const feature of features) {
-    const props = feature.properties || {};
-    const geomType = feature.geometry ? feature.geometry.type : '';
-    const cat = (props.category || '').toLowerCase();
-    const amenity = (props.amenity || '').toLowerCase();
-    const highway = (props.highway || '').toLowerCase();
-    const building = props.building;
-    const waterway = (props.waterway || '').toLowerCase();
-    const power = (props.power || props.outages !== undefined || props.grid_voltage !== undefined);
-
-    // 1. Healthcare Facilities
-    if (
-      cat === 'healthcare' ||
-      cat === 'hospital' ||
-      amenity === 'hospital' ||
-      amenity === 'clinic' ||
-      amenity === 'doctors' ||
-      amenity === 'health_centre' ||
-      amenity === 'dispensary'
-    ) {
-      counts.healthcare++;
-      detectedCategories.healthcare.push(feature);
-      continue;
-    }
-
-    // 2. Educational Facilities
-    if (
-      cat === 'education' ||
-      cat === 'school' ||
-      cat === 'college' ||
-      amenity === 'school' ||
-      amenity === 'college' ||
-      amenity === 'university' ||
-      amenity === 'kindergarten'
-    ) {
-      counts.education++;
-      detectedCategories.education.push(feature);
-      continue;
-    }
-
-    // 3. Water Network
-    if (
-      cat === 'water' ||
-      cat === 'pipeline' ||
-      waterway === 'pipeline' ||
-      props.water_pipe !== undefined ||
-      props.water_pressure !== undefined ||
-      props.diameterMm !== undefined
-    ) {
-      counts.water++;
-      detectedCategories.water.push(feature);
-      continue;
-    }
-
-    // 4. Drainage Network
-    if (
-      cat === 'drainage' ||
-      cat === 'stormwater' ||
-      waterway === 'drain' ||
-      waterway === 'ditch' ||
-      props.drain_type !== undefined ||
-      props.stormwater !== undefined
-    ) {
-      counts.drainage++;
-      detectedCategories.drainage.push(feature);
-      continue;
-    }
-
-    // 5. Power / Electrical Network & Outage Telemetry
-    if (
-      cat === 'power' ||
-      cat === 'electricity' ||
-      power ||
-      props.outage_history !== undefined ||
-      props.blackout_hours !== undefined
-    ) {
-      counts.power++;
-      detectedCategories.power.push(feature);
-      continue;
-    }
-
-    // 6. Roads / Transportation
-    if (
-      cat === 'road' ||
-      highway ||
-      geomType === 'LineString' ||
-      geomType === 'MultiLineString'
-    ) {
-      counts.roads++;
-      detectedCategories.roads.push(feature);
-      continue;
-    }
-
-    // 7. Buildings / Urban Footprints
-    if (
-      cat === 'building' ||
-      building ||
-      geomType === 'Polygon' ||
-      geomType === 'MultiPolygon'
-    ) {
-      counts.buildings++;
-      detectedCategories.buildings.push(feature);
-      continue;
-    }
+    const category = classifyFeature(feature);
+    if (!category) continue;
+    counts[category]++;
+    detectedCategories[category].push(feature);
   }
 
   // Determine Data Availability with explicit verification statuses

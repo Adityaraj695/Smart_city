@@ -1,4 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import AuthPage from './components/AuthPage';
+import SavedFilesPage from './components/SavedFilesPage';
+import DatasetSelector from './components/DatasetSelector';
+import { api } from './utils/api';
 import Sidebar from './components/Sidebar';
 import TopNavbar from './components/TopNavbar';
 import UploadPage from './components/UploadPage';
@@ -31,6 +35,17 @@ import {
 import { analyzeGeoJsonData } from './utils/geoJsonAnalyzer';
 
 export default function App() {
+  // Signed-in user (null = signed out); authChecked flips once /api/me answers.
+  const [user, setUser] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [savedFilesVersion, setSavedFilesVersion] = useState(0);
+  // Which GeoJSON is on the map: 'sample' or a saved file's id
+  const [activeSourceId, setActiveSourceId] = useState('sample');
+
+  useEffect(() => {
+    api.me().then((d) => setUser(d.user)).catch(() => {}).finally(() => setAuthChecked(true));
+  }, []);
+
   // Which top-level screen is showing: 'upload' (the standalone GeoJSON intake
   // page) or 'dashboard' (the full analysis workspace). The app opens on the
   // upload page and moves to the dashboard once data is provided.
@@ -49,6 +64,9 @@ export default function App() {
     featureCount: patialaSectorDataset.geoJson.features.length,
     timestamp: 'May 2026'
   });
+
+  // Result of analysing an uploaded file (null while the built-in sample is loaded)
+  const [uploadAnalysis, setUploadAnalysis] = useState(null);
 
   // Power Outage Telemetry Simulation
   const [powerSimulated, setPowerSimulated] = useState(false);
@@ -71,17 +89,18 @@ export default function App() {
 
   // Data Availability state
   const dataAvailability = useMemo(() => {
+    const base = uploadAnalysis ? uploadAnalysis.dataAvailability : initialMetrics.dataAvailability;
     return {
-      ...initialMetrics.dataAvailability,
+      ...base,
       power: {
-        ...initialMetrics.dataAvailability.power,
+        ...base.power,
         available: powerSimulated,
         count: powerSimulated ? 14 : 0,
         status: powerSimulated ? 'verified' : 'missing',
         detail: powerSimulated ? '14 telemetry feeds verified (Simulated)' : 'Not Available'
       }
     };
-  }, [powerSimulated]);
+  }, [powerSimulated, uploadAnalysis]);
 
   // Compute live summary counts
   const summaryCounts = useMemo(() => {
@@ -105,7 +124,7 @@ export default function App() {
   }, [issues, recommendations]);
 
   // Handle custom file upload
-  const handleFileUpload = (geoJsonData, fileName, fileSize) => {
+  const handleFileUpload = (geoJsonData, fileName, fileSize, alreadySaved = false) => {
     try {
       const analysis = analyzeGeoJsonData(geoJsonData);
 
@@ -120,6 +139,11 @@ export default function App() {
       };
 
       setCurrentDataset(customDataset);
+      setUploadAnalysis(analysis);
+      // The built-in gap zones and proposed sites belong to the sample dataset only;
+      // never draw them over a user's own data.
+      setMapGapZones([]);
+      setMapInterventions([]);
       setCurrentFileMeta({
         name: fileName,
         size: fileSize || 'Custom File',
@@ -128,6 +152,16 @@ export default function App() {
       });
 
       setPowerSimulated(analysis.counts.power > 0);
+
+      // Store the file in the user's account so it can be reviewed later.
+      if (!alreadySaved) {
+        api.saveFile({ name: fileName, sizeLabel: fileSize, geojson: geoJsonData })
+          .then(({ id }) => {
+            setActiveSourceId(id);
+            setSavedFilesVersion((v) => v + 1);
+          })
+          .catch((err) => console.error('Could not save GeoJSON file:', err));
+      }
 
       // Input has been provided — move on to the main dashboard.
       goToDashboard();
@@ -145,6 +179,8 @@ export default function App() {
 
   // Reset to default Patiala Sector Sample
   const handleResetToSample = () => {
+    setActiveSourceId('sample');
+    setUploadAnalysis(null);
     setCurrentDataset(patialaSectorDataset);
     setCurrentFileMeta({
       name: 'patiala_urban_sector_4.geojson',
@@ -190,6 +226,19 @@ export default function App() {
     }
   };
 
+  const handleLogout = async () => {
+    await api.logout().catch(() => {});
+    setUser(null);
+    setPage('upload');
+    setActiveNav('dashboard');
+  };
+
+  // Re-open a file stored in the database for review.
+  const handleOpenSavedFile = (file) => {
+    handleFileUpload(file.geojson, file.name, file.sizeLabel, true);
+    setActiveSourceId(file.id);
+  };
+
   // Handle "View on Map" requests
   const handleFocusOnMap = (coordinates, title, details, category, severity, priority) => {
     setFocusedLocation({
@@ -210,6 +259,9 @@ export default function App() {
 
     if (navId === 'dashboard') {
       setPage('dashboard');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } else if (navId === 'files') {
+      setPage('files');
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } else if (navId === 'upload') {
       // The GeoJSON intake lives on its own page now — jump there.
@@ -241,12 +293,22 @@ export default function App() {
   // navigates back to "Upload GeoJSON" from the sidebar. It only takes
   // input; providing it (a file, or the sample dataset) hands off straight
   // to the dashboard, where everything about that data is then shown.
+  if (!authChecked) return null;
+  if (!user) return <AuthPage onAuthenticated={setUser} />;
+
   if (page === 'upload') {
     return (
-      <UploadPage
-        onFileUpload={handleFileUpload}
-        onUseSample={handleUseSample}
-      />
+      <>
+        <div className="flex items-center justify-end gap-4 px-6 py-2 bg-white border-b border-neutral-200 text-xs text-neutral-500">
+          <span>Signed in as <b className="text-neutral-800">{user.fullName}</b></span>
+          <button onClick={() => handleNavigate('files')} className="font-semibold text-blue-600 hover:underline">Saved Files</button>
+          <button onClick={handleLogout} className="font-semibold text-rose-600 hover:underline">Log out</button>
+        </div>
+        <UploadPage
+          onFileUpload={handleFileUpload}
+          onUseSample={handleUseSample}
+        />
+      </>
     );
   }
 
@@ -257,6 +319,8 @@ export default function App() {
         activeNav={activeNav}
         onNavigate={handleNavigate}
         datasetName={currentDataset.name}
+        user={user}
+        onLogout={handleLogout}
       />
 
       {/* Main Content Area */}
@@ -272,6 +336,15 @@ export default function App() {
 
         {/* Content Container */}
         <main className="flex-1 p-6 max-w-7xl w-full mx-auto space-y-6">
+          {page === 'files' ? (
+            <SavedFilesPage refreshKey={savedFilesVersion} onOpenFile={handleOpenSavedFile} />
+          ) : (<>
+          <DatasetSelector
+            activeSourceId={activeSourceId}
+            refreshKey={savedFilesVersion}
+            onSelectSample={handleResetToSample}
+            onSelectFile={handleOpenSavedFile}
+          />
           {/* 1. Data Source: what was actually provided, and what it contains */}
           <DataSourceSummary
             currentFile={currentFileMeta}
@@ -417,6 +490,7 @@ export default function App() {
               />
             )}
           </div>
+          </>)}
         </main>
 
         {/* Global Footer */}

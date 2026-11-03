@@ -1,0 +1,12 @@
+osm_id,waterway,feature_category,geometry_type,vertex_count,length_m_approx,tunnel,layer
+way/570505044,stream,stream,LineString,121,4105.7,,
+way/570506861,canal,canal,LineString,28,680.53,,
+way/570509678,canal,canal,LineString,44,1349.42,,
+way/635411807,stream,stream,LineString,383,24836.94,,
+way/636369748,canal,canal,LineString,39,5821.46,,
+way/637857213,ditch,ditch,LineString,7,978.97,,
+way/638317407,drain,drainage,LineString,83,10531.1,,
+way/638529645,stream,stream,LineString,4,72.74,,
+way/641497638,ditch,ditch,LineString,24,3565.19,,
+way/679377729,stream,stream,LineString,2,84.16,culvert,-1
+way/679377730,stream,stream,LineString,11,509.58,,

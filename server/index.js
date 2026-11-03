@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { createAnalyzeRouter } from './analyze.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.join(__dirname, 'data');
@@ -43,6 +44,32 @@ db.exec(`
 const SESSION_DAYS = 7;
 const COOKIE = 'civicpulse_session';
 
+// Login attempts were unlimited. In-memory and per-process, which is the right
+// size for this deployment; a multi-instance one needs a shared store.
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_ATTEMPTS = 10;
+const loginAttempts = new Map();
+
+function tooManyAttempts(key) {
+  const now = Date.now();
+  const rec = loginAttempts.get(key);
+  if (!rec || now - rec.first > LOGIN_WINDOW_MS) {
+    loginAttempts.set(key, { first: now, count: 1 });
+    return false;
+  }
+  rec.count += 1;
+  return rec.count > LOGIN_MAX_ATTEMPTS;
+}
+
+function clearAttempts(key) {
+  loginAttempts.delete(key);
+}
+
+// Expired sessions were never removed, so the table grew without bound.
+function pruneSessions() {
+  db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(Date.now());
+}
+
 const hashToken = (t) => crypto.createHash('sha256').update(t).digest('hex');
 
 function hashPassword(password) {
@@ -52,14 +79,25 @@ function hashPassword(password) {
 }
 
 function verifyPassword(password, stored) {
-  const [salt, hash] = stored.split(':');
-  const candidate = crypto.scryptSync(password, salt, 64);
-  return crypto.timingSafeEqual(candidate, Buffer.from(hash, 'hex'));
+  // A malformed stored hash used to throw out of here: timingSafeEqual raises
+  // RangeError when the buffers differ in length, which Express turns into a
+  // 500. A failed comparison is a failed login, not a server fault.
+  try {
+    const [salt, hash] = String(stored).split(':');
+    if (!salt || !hash) return false;
+    const expected = Buffer.from(hash, 'hex');
+    const candidate = crypto.scryptSync(password, salt, expected.length || 64);
+    if (candidate.length !== expected.length) return false;
+    return crypto.timingSafeEqual(candidate, expected);
+  } catch {
+    return false;
+  }
 }
 
 const publicUser = (u) => ({ id: u.id, fullName: u.full_name, email: u.email, role: u.role });
 
 function startSession(res, userId) {
+  pruneSessions();
   const token = crypto.randomBytes(32).toString('hex');
   const maxAgeMs = SESSION_DAYS * 24 * 60 * 60 * 1000;
   db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
@@ -96,11 +134,23 @@ export function createApi() {
     if (!/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address' });
     if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
 
+    // The read-then-write check below is a courtesy, not the guarantee: two
+    // concurrent signups can both pass it. The UNIQUE constraint is the real
+    // guard, so the insert is wrapped to turn its error into the 409 the
+    // client expects rather than an HTML 500.
     if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(email.trim())) {
       return res.status(409).json({ error: 'An account with this email already exists' });
     }
-    const info = db.prepare('INSERT INTO users (full_name, email, role, password_hash) VALUES (?, ?, ?, ?)')
-      .run(fullName.trim(), email.trim(), role?.trim() || 'Urban Planner', hashPassword(password));
+    let info;
+    try {
+      info = db.prepare('INSERT INTO users (full_name, email, role, password_hash) VALUES (?, ?, ?, ?)')
+        .run(fullName.trim(), email.trim(), role?.trim() || 'Urban Planner', hashPassword(password));
+    } catch (err) {
+      if (String(err.message || '').includes('UNIQUE')) {
+        return res.status(409).json({ error: 'An account with this email already exists' });
+      }
+      throw err;
+    }
     startSession(res, Number(info.lastInsertRowid));
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
     res.status(201).json({ user: publicUser(user) });
@@ -108,10 +158,17 @@ export function createApi() {
 
   api.post('/login', (req, res) => {
     const { email, password } = req.body || {};
+    const key = `${req.ip}:${String(email || '').toLowerCase().trim()}`;
+    if (tooManyAttempts(key)) {
+      return res.status(429).json({
+        error: 'Too many sign-in attempts. Try again in a few minutes.'
+      });
+    }
     const user = email && db.prepare('SELECT * FROM users WHERE email = ?').get(String(email).trim());
     if (!user || !password || !verifyPassword(String(password), user.password_hash)) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
+    clearAttempts(key);
     startSession(res, user.id);
     res.json({ user: publicUser(user) });
   });
@@ -124,6 +181,9 @@ export function createApi() {
   });
 
   api.get('/me', requireAuth, (req, res) => res.json({ user: publicUser(req.user) }));
+
+  // Seam for an external analysis model. See server/analyze.js for the contract.
+  api.use('/analyze', requireAuth, createAnalyzeRouter());
 
   // Saved GeoJSON files (per user)
   api.get('/files', requireAuth, (req, res) => {

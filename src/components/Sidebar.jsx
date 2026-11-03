@@ -14,14 +14,19 @@ import {
   LogOut
 } from 'lucide-react';
 
-export default function Sidebar({ activeNav, onNavigate, datasetName, user, onLogout }) {
+export default function Sidebar({
+  issueCount = 0,
+  recommendationCount = 0,
+  activeNav, onNavigate, datasetName, user, onLogout }) {
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'map', label: 'Map Analysis', icon: MapPin },
     { id: 'upload', label: 'Upload GeoJSON', icon: UploadCloud },
     { id: 'files', label: 'Saved Files', icon: FolderOpen },
-    { id: 'issues', label: 'Infrastructure Issues', icon: AlertOctagon, count: 24 },
-    { id: 'recommendations', label: 'Recommendations', icon: Lightbulb, count: 18 },
+    // Counts come from the loaded analysis. They were literals — 24 and 18 —
+    // so the sidebar contradicted the issues table on the same screen.
+    { id: 'issues', label: 'Infrastructure Issues', icon: AlertOctagon, count: issueCount },
+    { id: 'recommendations', label: 'Recommendations', icon: Lightbulb, count: recommendationCount },
     { id: 'visuals', label: 'Priority Visuals', icon: BarChart3 },
     { id: 'history', label: 'Analysis History', icon: History }
   ];

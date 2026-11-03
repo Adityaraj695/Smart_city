@@ -7,7 +7,8 @@
     "dev": "node serve.js",
     "build": "vite build",
     "start": "node serve.js",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "lint": "oxlint src/"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",
@@ -27,5 +28,8 @@
     "@vitejs/plugin-react": "^6.1.2",
     "oxlint": "^1.81.0",
     "vite": "^8.3.0"
+  },
+  "engines": {
+    "node": ">=22.5.0"
   }
 }

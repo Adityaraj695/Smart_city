@@ -8,14 +8,196 @@ import {
   Lock,
   Building,
   Navigation,
-  Activity
+  Activity,
+  AlertTriangle
 } from 'lucide-react';
+
+// Every figure on these cards is now computed from the loaded GeoJSON.
+//
+// They were previously literals in this file — "78.4% REACH", "3 nodes",
+// "Hospitals: 1 General (Rajindra)", "Road Links: 86 segments". Those numbers
+// rendered unchanged for any uploaded file, directly beneath a Data
+// Availability panel that correctly reported the file's real counts. A user
+// could see "Roads: 2 items" and "Road Links: 86 segments" on one screen.
+//
+// The locked state for a missing layer is kept exactly as it was. Refusing to
+// compute a module when its data is absent, rather than interpolating, is the
+// best idea in this codebase and the reason the rest of it is worth fixing.
+
+const pct = (x) => `${(x * 100).toFixed(1)}%`;
+
+function SampleBadge() {
+  return (
+    <span
+      className="text-[9px] px-1.5 py-0.5 rounded bg-violet-50 text-violet-700 border border-violet-200 font-bold"
+      title="These figures belong to the built-in demo dataset, not to an uploaded file."
+    >
+      SAMPLE
+    </span>
+  );
+}
+
+function ModuleCard({
+  icon: Icon,
+  iconClass,
+  title,
+  blurb,
+  module: mod,
+  sampleFallback,
+  isSample,
+  issues,
+  category,
+  onFilterCategory,
+  onFocusGap,
+  accent
+}) {
+  const relevant = issues.filter((i) => i.category === category);
+  const worst = relevant.reduce(
+    (m, i) => (m === null || i.severity > m.severity ? i : m),
+    null
+  );
+
+  // Layer absent from the file: lock the module rather than estimate it.
+  if (!isSample && (!mod || !mod.available)) {
+    return (
+      <div className="rounded-xl p-3.5 flex flex-col justify-between border shadow-sm bg-neutral-50 border-neutral-200">
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <Icon className="w-4 h-4 text-neutral-400" />
+              <h4 className="font-bold text-xs text-neutral-900">{title}</h4>
+            </div>
+            <span className="text-[10px] px-1.5 py-0.5 rounded border bg-neutral-100 text-neutral-400 border-neutral-200">
+              NO DATA
+            </span>
+          </div>
+          <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-2.5">
+            <div className="flex items-start gap-1.5">
+              <AlertTriangle className="w-3 h-3 text-amber-600 mt-0.5 shrink-0" />
+              <p className="text-[11px] text-amber-800 leading-snug">
+                {mod?.reason ||
+                  `No ${title.toLowerCase()} features in this file. Coverage is not computed, and is not assumed.`}
+              </p>
+            </div>
+          </div>
+        </div>
+        <div className="mt-4 pt-2.5 border-t border-neutral-100">
+          <div className="text-xs text-neutral-400 mb-2">0 Issues (No Data)</div>
+          <button
+            disabled
+            className="w-full py-1.5 px-3 rounded bg-neutral-100 border border-neutral-200 text-neutral-400 text-xs font-semibold flex items-center justify-center gap-1.5 cursor-not-allowed"
+          >
+            <Lock className="w-3 h-3" />
+            <span>Analysis Unavailable</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const stats = isSample ? sampleFallback.stats : [
+    { k: 'Coverage', v: pct(mod.coverage), strong: true },
+    { k: 'Features mapped', v: `${mod.facilities}` },
+    { k: 'Buildings served', v: `${mod.buildingsServed.toLocaleString('en-IN')}` },
+    { k: 'Beyond the norm', v: `${mod.buildingsUnderserved.toLocaleString('en-IN')}`, warn: mod.buildingsUnderserved > 0 }
+  ];
+  const reach = isSample ? sampleFallback.reach : pct(mod.coverage);
+  const norm = isSample ? sampleFallback.norm : mod.norm;
+
+  return (
+    <div className={`rounded-xl p-3.5 flex flex-col justify-between border shadow-sm bg-white ${accent}`}>
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <Icon className={`w-4 h-4 ${iconClass}`} />
+            <h4 className="font-bold text-xs text-neutral-900">{title}</h4>
+          </div>
+          <div className="flex items-center gap-1">
+            {isSample && <SampleBadge />}
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-50 text-cyan-700 border border-cyan-200">
+              {reach} REACH
+            </span>
+          </div>
+        </div>
+
+        <p className="text-[11px] text-neutral-500 font-sans leading-tight">{blurb}</p>
+
+        {norm && (
+          <p className="text-[10px] text-neutral-400 font-sans mt-1 leading-tight">
+            Norm: {norm.label} — {norm.citation}
+          </p>
+        )}
+
+        <ul className="mt-3 space-y-1.5 text-[11px] border-t border-neutral-100 pt-2.5 text-neutral-600">
+          {stats.map((s) => (
+            <li key={s.k} className="flex items-center justify-between">
+              <span className="text-neutral-400">{s.k}:</span>
+              <span
+                className={
+                  s.warn ? 'font-bold text-rose-600'
+                    : s.strong ? 'font-bold text-neutral-700'
+                      : 'text-neutral-600'
+                }
+              >
+                {s.v}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="mt-4 pt-2.5 border-t border-neutral-100">
+        <div className="flex items-center justify-between mb-2 text-xs">
+          <span className={`font-bold flex items-center gap-1 ${relevant.length ? 'text-rose-600' : 'text-emerald-600'}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${relevant.length ? 'bg-rose-500' : 'bg-emerald-500'}`}></span>
+            {relevant.length} {relevant.length === 1 ? 'Issue' : 'Issues'} Detected
+          </span>
+          {worst && (
+            <span className="text-neutral-400 text-[10px]">Severity {worst.severity}</span>
+          )}
+        </div>
+
+        <button
+          onClick={() => {
+            onFilterCategory(category);
+            if (worst) {
+              onFocusGap(
+                worst.coordinates,
+                `${worst.category} Gap`,
+                worst.problem,
+                worst.category,
+                worst.severity,
+                worst.priority
+              );
+            }
+          }}
+          disabled={!relevant.length}
+          className="w-full py-1.5 px-3 rounded bg-neutral-100 hover:bg-cyan-600 hover:text-white border border-neutral-200 text-neutral-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 disabled:hover:bg-neutral-100 disabled:hover:text-neutral-700"
+        >
+          <span>View Analysis</span>
+          <ArrowRight className="w-3 h-3" />
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export default function AnalysisModules({
   powerAvailable,
   onFilterCategory,
-  onFocusGap
+  onFocusGap,
+  modules = {},
+  issues = [],
+  counts = {},
+  isSample = false
 }) {
+  // Water and drainage are presented as one module, as they were before;
+  // whichever is worse covered drives the card.
+  const waterish = [modules.water, modules.drainage].filter((m) => m && m.available);
+  const waterModule = waterish.length
+    ? waterish.reduce((a, b) => (a.coverage <= b.coverage ? a : b))
+    : (modules.water || modules.drainage || null);
+
   return (
     <section className="space-y-3 font-mono">
       <div className="flex items-center justify-between text-xs">
@@ -26,75 +208,39 @@ export default function AnalysisModules({
           </h3>
         </div>
         <span className="text-[10px] text-neutral-400">
-          SPATIAL DISTANCE & BUFFER CATCHMENT MODELING
+          {isSample
+            ? 'BUILT-IN SAMPLE DATASET'
+            : 'COMPUTED FROM THE UPLOADED FILE'}
         </span>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-        {/* Module 1: Water and Drainage */}
-        <div className="bg-white border border-neutral-200 rounded-xl p-3.5 flex flex-col justify-between shadow-sm">
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <Droplets className="w-4 h-4 text-cyan-600" />
-                <h4 className="font-bold text-xs text-neutral-900">Water & Drainage</h4>
-              </div>
-              <span className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-50 text-cyan-700 border border-cyan-200">
-                78.4% REACH
-              </span>
-            </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+        <ModuleCard
+          icon={Droplets}
+          iconClass="text-cyan-500"
+          title="Water & Drainage"
+          blurb="Distance from each building to the mapped supply and drainage network."
+          module={waterModule}
+          isSample={isSample}
+          sampleFallback={{
+            reach: '78.4%',
+            norm: null,
+            stats: [
+              { k: 'Network coverage', v: '78.4%', strong: true },
+              { k: 'Disconnected areas', v: '3 nodes', warn: true },
+              { k: 'Potential gaps', v: 'Eastern zone' }
+            ]
+          }}
+          issues={issues}
+          category="Water & Drainage"
+          onFilterCategory={onFilterCategory}
+          onFocusGap={onFocusGap}
+          accent="border-neutral-200"
+        />
 
-            <p className="text-[11px] text-neutral-500 font-sans leading-tight">
-              Hydraulic pipeline pressure & stormwater drainage capacity analysis.
-            </p>
-
-            <ul className="mt-3 space-y-1.5 text-[11px] border-t border-neutral-100 pt-2.5 text-neutral-600">
-              <li className="flex items-center justify-between">
-                <span className="text-neutral-400">Network coverage:</span>
-                <span className="font-bold text-neutral-700">78.4%</span>
-              </li>
-              <li className="flex items-center justify-between">
-                <span className="text-neutral-400">Disconnected areas:</span>
-                <span className="font-bold text-rose-600">3 nodes</span>
-              </li>
-              <li className="flex items-center justify-between">
-                <span className="text-neutral-400">Potential drainage gaps:</span>
-                <span className="font-bold text-amber-600">Eastern zone</span>
-              </li>
-              <li className="flex items-center justify-between">
-                <span className="text-neutral-400">Dense area coverage:</span>
-                <span className="text-neutral-600">Deficit buffer</span>
-              </li>
-            </ul>
-          </div>
-
-          <div className="mt-4 pt-2.5 border-t border-neutral-100">
-            <div className="flex items-center justify-between mb-2 text-xs">
-              <span className="text-rose-600 font-bold flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
-                3 Issues Detected
-              </span>
-              <span className="text-neutral-400 text-[10px]">Severity 7.8</span>
-            </div>
-
-            <button
-              onClick={() => {
-                onFilterCategory('Water & Drainage');
-                onFocusGap([30.334, 76.411], 'Water & Drainage Gap', 'Eastern Mixed Dense Quarter lacks storm drainage coverage.', 'Water & Drainage', 7.8, 'HIGH');
-              }}
-              className="w-full py-1.5 px-3 rounded bg-neutral-100 hover:bg-cyan-600 hover:text-white border border-neutral-200 text-neutral-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
-            >
-              <span>View Analysis</span>
-              <ArrowRight className="w-3 h-3" />
-            </button>
-          </div>
-        </div>
-
-        {/* Module 2: Power Outages */}
+        {/* Power keeps its locked state; nothing here computes outage telemetry. */}
         <div className={`rounded-xl p-3.5 flex flex-col justify-between border shadow-sm ${
-          powerAvailable
-            ? 'bg-white border-amber-300'
-            : 'bg-neutral-50 border-neutral-200'
+          powerAvailable ? 'bg-white border-amber-300' : 'bg-neutral-50 border-neutral-200'
         }`}>
           <div>
             <div className="flex items-center justify-between mb-2">
@@ -102,7 +248,7 @@ export default function AnalysisModules({
                 <Zap className={`w-4 h-4 ${powerAvailable ? 'text-amber-500' : 'text-neutral-400'}`} />
                 <h4 className="font-bold text-xs text-neutral-900">Power Outages</h4>
               </div>
-              <span className={`text-[10px] px-1.5 py-0.2 rounded border ${
+              <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
                 powerAvailable
                   ? 'bg-amber-50 text-amber-700 border-amber-200'
                   : 'bg-neutral-100 text-neutral-400 border-neutral-200'
@@ -110,215 +256,95 @@ export default function AnalysisModules({
                 {powerAvailable ? 'SIMULATED FEED' : 'NO TELEMETRY'}
               </span>
             </div>
-
             <p className="text-[11px] text-neutral-500 font-sans leading-tight">
               Reported blackout zones and distribution grid frequency analysis.
             </p>
-
-            {powerAvailable ? (
-              <ul className="mt-3 space-y-1.5 text-[11px] border-t border-neutral-100 pt-2.5 text-neutral-600">
-                <li className="flex items-center justify-between">
-                  <span className="text-neutral-400">Reported outage zones:</span>
-                  <span className="font-bold text-amber-600">2 sectors</span>
-                </li>
-                <li className="flex items-center justify-between">
-                  <span className="text-neutral-400">Frequent outage areas:</span>
-                  <span className="text-neutral-700">Feeder 14</span>
-                </li>
-                <li className="flex items-center justify-between">
-                  <span className="text-neutral-400">Outage frequency:</span>
-                  <span className="font-bold text-rose-600">5.4h / wk</span>
-                </li>
-                <li className="flex items-center justify-between">
-                  <span className="text-neutral-400">Grid telemetry:</span>
-                  <span className="text-emerald-600 font-bold">Active</span>
-                </li>
-              </ul>
-            ) : (
-              <div className="mt-3 p-2 rounded bg-white border border-neutral-200 text-[11px] space-y-1">
-                <div className="flex items-center gap-1 text-amber-600 font-bold">
-                  <Lock className="w-3 h-3" />
-                  <span>Power outage data unavailable</span>
+            {!powerAvailable && (
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-2.5">
+                <div className="flex items-start gap-1.5">
+                  <AlertTriangle className="w-3 h-3 text-amber-600 mt-0.5 shrink-0" />
+                  <p className="text-[11px] text-amber-800 leading-snug">
+                    No electrical telemetry in this GeoJSON. Analysis is disabled
+                    rather than assumed.
+                  </p>
                 </div>
-                <p className="text-neutral-500 text-[10px] font-sans leading-tight">
-                  No electrical telemetry in GeoJSON. Analysis disabled to avoid assumptions.
-                </p>
               </div>
             )}
           </div>
-
           <div className="mt-4 pt-2.5 border-t border-neutral-100">
-            {powerAvailable ? (
-              <>
-                <div className="flex items-center justify-between mb-2 text-xs">
-                  <span className="text-amber-600 font-bold flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
-                    2 Problem Zones
-                  </span>
-                  <span className="text-neutral-400 text-[10px]">Severity 6.9</span>
-                </div>
-                <button
-                  onClick={() => {
-                    onFilterCategory('Power');
-                    onFocusGap([30.341, 76.398], 'Power Feeder 14 Outage Zone', 'Recurring distribution failure during peak demand.', 'Power', 6.9, 'MEDIUM');
-                  }}
-                  className="w-full py-1.5 px-3 rounded bg-neutral-100 hover:bg-amber-600 hover:text-white border border-neutral-200 text-neutral-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
-                >
-                  <span>View Analysis</span>
-                  <ArrowRight className="w-3 h-3" />
-                </button>
-              </>
-            ) : (
-              <>
-                <div className="flex items-center justify-between mb-2 text-xs text-neutral-400">
-                  <span>0 Issues (No Data)</span>
-                  <span className="text-[10px]">Locked</span>
-                </div>
-                <button
-                  disabled
-                  className="w-full py-1.5 px-2.5 rounded bg-white border border-neutral-200 text-neutral-400 text-[11px] font-medium cursor-not-allowed flex items-center justify-center gap-1"
-                >
-                  <Lock className="w-3 h-3" />
-                  <span>Analysis Unavailable (No Data)</span>
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* Module 3: Healthcare Services */}
-        <div className="bg-white border border-neutral-200 rounded-xl p-3.5 flex flex-col justify-between shadow-sm">
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <HeartPulse className="w-4 h-4 text-rose-600" />
-                <h4 className="font-bold text-xs text-neutral-900">Healthcare</h4>
-              </div>
-              <span className="text-[10px] px-1.5 py-0.2 rounded bg-rose-50 text-rose-700 border border-rose-200">
-                68.2% REACH
-              </span>
+            <div className="text-xs text-neutral-400 mb-2">
+              {powerAvailable ? 'Simulated telemetry active' : '0 Issues (No Data)'}
             </div>
-
-            <p className="text-[11px] text-neutral-500 font-sans leading-tight">
-              Hospital catchment buffers & emergency response travel-time modeling.
-            </p>
-
-            <ul className="mt-3 space-y-1.5 text-[11px] border-t border-neutral-100 pt-2.5 text-neutral-600">
-              <li className="flex items-center justify-between">
-                <span className="text-neutral-400">Hospitals:</span>
-                <span className="font-bold text-neutral-700">1 General (Rajindra)</span>
-              </li>
-              <li className="flex items-center justify-between">
-                <span className="text-neutral-400">Clinics & dispensaries:</span>
-                <span className="font-bold text-neutral-700">2 Community</span>
-              </li>
-              <li className="flex items-center justify-between">
-                <span className="text-neutral-400">Accessibility:</span>
-                <span className="text-amber-600 font-bold">68.2% (15 min)</span>
-              </li>
-              <li className="flex items-center justify-between">
-                <span className="text-neutral-400">Underserved regions:</span>
-                <span className="font-bold text-rose-600">Northern 4B</span>
-              </li>
-            </ul>
-          </div>
-
-          <div className="mt-4 pt-2.5 border-t border-neutral-100">
-            <div className="flex items-center justify-between mb-2 text-xs">
-              <span className="text-rose-600 font-bold flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
-                5 Potential Gaps Detected
-              </span>
-              <span className="text-neutral-400 text-[10px]">Severity 8.5</span>
-            </div>
-
             <button
-              onClick={() => {
-                onFilterCategory('Healthcare');
-                onFocusGap([30.355, 76.408], 'Northern Healthcare Void', 'Northern residential zone is 3.2km from nearest hospital.', 'Healthcare', 8.5, 'HIGH');
-              }}
-              className="w-full py-1.5 px-3 rounded bg-neutral-100 hover:bg-rose-600 hover:text-white border border-neutral-200 text-neutral-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+              disabled
+              className="w-full py-1.5 px-3 rounded bg-neutral-100 border border-neutral-200 text-neutral-400 text-xs font-semibold flex items-center justify-center gap-1.5 cursor-not-allowed"
             >
-              <span>View Analysis</span>
-              <ArrowRight className="w-3 h-3" />
+              <Lock className="w-3 h-3" />
+              <span>Analysis Unavailable (No Data)</span>
             </button>
           </div>
         </div>
 
-        {/* Module 4: Education Services */}
-        <div className="bg-white border border-neutral-200 rounded-xl p-3.5 flex flex-col justify-between shadow-sm">
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <GraduationCap className="w-4 h-4 text-indigo-600" />
-                <h4 className="font-bold text-xs text-neutral-900">Education</h4>
-              </div>
-              <span className="text-[10px] px-1.5 py-0.2 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
-                72.1% REACH
-              </span>
-            </div>
+        <ModuleCard
+          icon={HeartPulse}
+          iconClass="text-rose-500"
+          title="Healthcare"
+          blurb="Distance from each building to the nearest mapped health facility."
+          module={modules.healthcare}
+          isSample={isSample}
+          sampleFallback={{
+            reach: '68.2%',
+            norm: null,
+            stats: [
+              { k: 'Accessibility', v: '68.2% (15 min)', strong: true },
+              { k: 'Underserved', v: 'Northern 4B', warn: true }
+            ]
+          }}
+          issues={issues}
+          category="Healthcare"
+          onFilterCategory={onFilterCategory}
+          onFocusGap={onFocusGap}
+          accent="border-neutral-200"
+        />
 
-            <p className="text-[11px] text-neutral-500 font-sans leading-tight">
-              School capacity coverage & student walking radius accessibility.
-            </p>
-
-            <ul className="mt-3 space-y-1.5 text-[11px] border-t border-neutral-100 pt-2.5 text-neutral-600">
-              <li className="flex items-center justify-between">
-                <span className="text-neutral-400">Schools:</span>
-                <span className="font-bold text-neutral-700">3 Model Secondary</span>
-              </li>
-              <li className="flex items-center justify-between">
-                <span className="text-neutral-400">Colleges & universities:</span>
-                <span className="font-bold text-neutral-700">1 Polytechnic</span>
-              </li>
-              <li className="flex items-center justify-between">
-                <span className="text-neutral-400">Accessibility:</span>
-                <span className="text-neutral-700 font-bold">72.1%</span>
-              </li>
-              <li className="flex items-center justify-between">
-                <span className="text-neutral-400">Underserved regions:</span>
-                <span className="font-bold text-amber-600">Eastern zone</span>
-              </li>
-            </ul>
-          </div>
-
-          <div className="mt-4 pt-2.5 border-t border-neutral-100">
-            <div className="flex items-center justify-between mb-2 text-xs">
-              <span className="text-amber-600 font-bold flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
-                4 Potential Gaps Detected
-              </span>
-              <span className="text-neutral-400 text-[10px]">Severity 6.2</span>
-            </div>
-
-            <button
-              onClick={() => {
-                onFilterCategory('Education');
-                onFocusGap([30.347, 76.418], 'Eastern Education Void', 'Expansion zone lacks secondary school access.', 'Education', 6.2, 'MEDIUM');
-              }}
-              className="w-full py-1.5 px-3 rounded bg-neutral-100 hover:bg-indigo-600 hover:text-white border border-neutral-200 text-neutral-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
-            >
-              <span>View Analysis</span>
-              <ArrowRight className="w-3 h-3" />
-            </button>
-          </div>
-        </div>
+        <ModuleCard
+          icon={GraduationCap}
+          iconClass="text-indigo-500"
+          title="Education"
+          blurb="Distance from each building to the nearest mapped school."
+          module={modules.education}
+          isSample={isSample}
+          sampleFallback={{
+            reach: '72.1%',
+            norm: null,
+            stats: [
+              { k: 'Accessibility', v: '72.1%', strong: true },
+              { k: 'Underserved', v: 'Eastern zone', warn: true }
+            ]
+          }}
+          issues={issues}
+          category="Education"
+          onFilterCategory={onFilterCategory}
+          onFocusGap={onFocusGap}
+          accent="border-neutral-200"
+        />
       </div>
 
-      {/* Supporting GIS Features: Roads & Buildings */}
-      <div className="bg-white p-2.5 rounded-lg border border-neutral-200 text-[11px] text-neutral-500 flex flex-col sm:flex-row items-center justify-between gap-2 shadow-sm">
-        <span className="font-bold text-neutral-600 uppercase text-[10px]">
-          Supporting Features:
+      {/* Supporting counts, read from the same source as the availability panel
+          above so the two can no longer disagree on screen. */}
+      <div className="flex items-center justify-between rounded-lg border border-neutral-200 bg-white px-3.5 py-2 text-[11px]">
+        <span className="text-neutral-400 uppercase tracking-wider font-bold text-[10px]">
+          Supporting features
         </span>
         <div className="flex items-center gap-5">
-          <div className="flex items-center gap-1.5">
-            <Navigation className="w-3.5 h-3.5 text-sky-600" />
-            <span>Road Links: <strong className="text-neutral-700">86 segments</strong></span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <Building className="w-3.5 h-3.5 text-amber-600" />
-            <span>Building Clusters: <strong className="text-neutral-700">142 structural units</strong></span>
-          </div>
+          <span className="flex items-center gap-1.5 text-neutral-600">
+            <Navigation className="w-3 h-3 text-neutral-400" />
+            Road links: <b className="text-neutral-800">{(counts.roads ?? 0).toLocaleString('en-IN')}</b>
+          </span>
+          <span className="flex items-center gap-1.5 text-neutral-600">
+            <Building className="w-3 h-3 text-neutral-400" />
+            Buildings: <b className="text-neutral-800">{(counts.buildings ?? 0).toLocaleString('en-IN')}</b>
+          </span>
         </div>
       </div>
     </section>

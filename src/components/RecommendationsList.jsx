@@ -75,7 +75,7 @@ export default function RecommendationsList({
                     <span className="text-xs font-bold text-neutral-700 uppercase">{rec.category}</span>
                   </div>
 
-                  <span className={`px-2 py-0.2 rounded text-[9px] font-bold border ${prioStyle.badge}`}>
+                  <span className={`px-2 py-0.5 rounded text-[9px] font-bold border ${prioStyle.badge}`}>
                     {rec.priority === 'HIGH' ? '🔴 HIGH' : rec.priority === 'MEDIUM' ? '🟡 MEDIUM' : '🟢 LOW'}
                   </span>
                 </div>

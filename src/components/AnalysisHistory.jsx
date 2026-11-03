@@ -42,7 +42,7 @@ export default function AnalysisHistory({
           >
             <div>
               <div className="flex items-center justify-between mb-1 text-[10px]">
-                <span className="px-1.5 py-0.2 rounded bg-white text-neutral-500 border border-neutral-200">
+                <span className="px-1.5 py-0.5 rounded bg-white text-neutral-500 border border-neutral-200">
                   {item.status}
                 </span>
                 <span className="text-neutral-400 flex items-center gap-1">

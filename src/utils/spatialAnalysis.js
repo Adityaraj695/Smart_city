@@ -18,7 +18,7 @@
 //   water       a premises is served if the distribution network reaches it
 
 import { classifyFeature } from './geoJsonAnalyzer';
-import { counted, estimated, official } from './provenance';
+import { counted, estimated } from './provenance';
 
 export const NORMS = {
   education: {
